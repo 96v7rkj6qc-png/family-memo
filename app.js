@@ -98,6 +98,141 @@ async function askConfirm({ title, message, okLabel }) {
   return !!r && r.value === 'ok';
 }
 
+// ---------- 定番シート ----------
+let presetView = null; // 開いている間だけ { refresh }
+
+function openPresets() {
+  const list = lists.find((l) => l.id === activeId);
+  if (!list) return;
+  const listId = list.id;
+  let presets = [];
+  let editing = false;
+
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  const sh = document.createElement('div');
+  sh.className = 'sheet tall';
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  ov.appendChild(sh);
+
+  const head = document.createElement('div');
+  head.className = 'sheet-head';
+  const h = document.createElement('h2');
+  h.textContent = '定番：' + list.name;
+  const editBtn = document.createElement('button');
+  editBtn.className = 'btn';
+  head.append(h, editBtn);
+
+  const hint = document.createElement('p');
+  const plist = document.createElement('div');
+  plist.className = 'plist';
+
+  const addRow = document.createElement('form');
+  addRow.className = 'padd';
+  addRow.autocomplete = 'off';
+  const addIn = document.createElement('input');
+  addIn.className = 'in';
+  addIn.type = 'text';
+  addIn.placeholder = '定番を追加…';
+  addIn.maxLength = 100;
+  addIn.setAttribute('aria-label', '定番を追加');
+  const addBtn = document.createElement('button');
+  addBtn.className = 'add';
+  addBtn.type = 'submit';
+  addBtn.textContent = '＋';
+  addBtn.setAttribute('aria-label', '定番に追加');
+  addRow.append(addIn, addBtn);
+  addRow.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = addIn.value.trim();
+    if (!v) return;
+    addIn.value = '';
+    store.addPreset(listId, v);
+    addIn.focus();
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn plain';
+  closeBtn.textContent = '閉じる';
+
+  sh.append(head, hint, plist, addRow, closeBtn);
+
+  function render() {
+    editBtn.textContent = editing ? '完了' : '編集';
+    hint.textContent = editing
+      ? '名前をタップで変更、✕で削除できます。'
+      : 'タップするとリストに追加されます。';
+    addRow.hidden = !editing;
+    plist.textContent = '';
+    if (!presets.length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = '定番はまだありません。';
+      plist.appendChild(e);
+      const s = document.createElement('button');
+      s.className = 'btn primary';
+      s.style.width = '100%';
+      s.textContent = 'サンプル定番を入れる';
+      s.addEventListener('click', () => store.addSamplePresets(listId));
+      plist.appendChild(s);
+      return;
+    }
+    const pending = new Set(items.filter((i) => !i.done).map((i) => i.title));
+    presets.forEach((p) => {
+      if (editing) {
+        const row = document.createElement('div');
+        row.className = 'prow';
+        const t = document.createElement('button');
+        t.className = 'pt';
+        t.style.textAlign = 'left';
+        t.style.minHeight = '44px';
+        t.textContent = p.title;
+        t.addEventListener('click', async () => {
+          const n = await askText({ title: '定番の名前を変更', value: p.title, okLabel: '保存' });
+          if (n) store.renamePreset(p.id, n);
+        });
+        const x = document.createElement('button');
+        x.className = 'px';
+        x.textContent = '✕';
+        x.setAttribute('aria-label', p.title + 'を定番から削除');
+        x.addEventListener('click', () => store.deletePreset(p.id));
+        row.append(t, x);
+        plist.appendChild(row);
+      } else {
+        const added = pending.has(p.title);
+        const row = document.createElement('button');
+        row.className = 'prow' + (added ? ' added' : '');
+        row.style.minHeight = '52px';
+        const t = document.createElement('span');
+        t.className = 'pt';
+        t.textContent = p.title;
+        const a = document.createElement('span');
+        a.className = 'pa';
+        a.textContent = added ? '追加済み' : '＋';
+        row.append(t, a);
+        row.disabled = added;
+        row.addEventListener('click', () => store.addItem(listId, p.title));
+        plist.appendChild(row);
+      }
+    });
+  }
+
+  const unsub = store.subscribePresets(listId, (arr) => { presets = arr; render(); });
+  const close = () => {
+    unsub();
+    presetView = null;
+    ov.remove();
+  };
+  presetView = { refresh: render };
+  editBtn.addEventListener('click', () => { editing = !editing; render(); if (editing) addIn.focus(); });
+  closeBtn.addEventListener('click', close);
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+
+  $('modal-root').appendChild(ov);
+  render();
+}
+
 // ---------- 描画 ----------
 function renderTabs() {
   const nav = $('tabs');
@@ -164,6 +299,7 @@ function itemRow(it) {
 function renderItems() {
   const box = $('items');
   box.textContent = '';
+  if (presetView) presetView.refresh(); // 定番シートの「追加済み」表示を更新
   if (!activeId) return;
   const todo = items.filter((i) => !i.done).sort((a, b) => a.createdAt - b.createdAt);
   const done = items.filter((i) => i.done).sort((a, b) => (b.checkedAt || 0) - (a.checkedAt || 0));
@@ -289,6 +425,7 @@ function init() {
     box.scrollTop = 0;
   });
   $('btn-settings').addEventListener('click', onSettings);
+  $('btn-presets').addEventListener('click', openPresets);
 
   ensureUser();
 }

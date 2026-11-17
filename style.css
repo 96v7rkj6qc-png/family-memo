@@ -112,6 +112,27 @@ input { font: inherit; color: inherit; }
   background: var(--accent); color: var(--onaccent); font-size: 26px; font-weight: 700;
 }
 
+.presets-btn {
+  flex: none; height: 48px; padding: 0 14px; border-radius: 12px;
+  background: var(--chip); color: var(--accent); font-weight: 700; font-size: 15px;
+}
+
+/* 定番シート */
+.sheet.tall { max-height: 82dvh; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sheet-head .btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+.plist { overflow-y: auto; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch; }
+.prow { display: flex; align-items: center; min-height: 52px; border-bottom: 1px solid var(--line); width: 100%; text-align: left; gap: 8px; }
+.prow .pt { flex: 1; min-width: 0; font-size: 17px; word-break: break-word; }
+.prow .pa { flex: none; color: var(--accent); font-weight: 700; font-size: 20px; width: 44px; text-align: center; }
+.prow.added { opacity: .5; }
+.prow.added .pa { font-size: 13px; width: auto; padding-right: 4px; color: var(--sub); font-weight: 400; }
+.prow .px { width: 44px; height: 44px; display: grid; place-items: center; color: var(--sub); font-size: 18px; flex: none; }
+.padd { display: flex; gap: 8px; }
+.padd[hidden] { display: none; }
+.sheet .padd .in { flex: 1; width: auto; }
+.padd .add { width: 48px; }
+
 /* モーダル／シート */
 .overlay {
   position: fixed; inset: 0; background: var(--overlay);
