@@ -1,5 +1,5 @@
 // app.js — 画面制御。データには store.js 経由でのみ触れる。
-import * as store from './store.js';
+let store; // 起動時に読み込む（通信できないときに画面で知らせるため）
 
 const $ = (id) => document.getElementById(id);
 const ACTIVE_KEY = 'familyMemo.activeList'; // 端末ごとの表示状態（共有データではない）
@@ -36,6 +36,12 @@ function openSheet({ title, message, input, actions, dismissible = true }) {
       inputEl.value = input.value || '';
       inputEl.placeholder = input.placeholder || '';
       inputEl.maxLength = input.maxLength || 40;
+      if (input.raw) { // 合言葉用：自動大文字化や自動修正をしない
+        inputEl.setAttribute('autocapitalize', 'off');
+        inputEl.setAttribute('autocorrect', 'off');
+        inputEl.autocomplete = 'off';
+        inputEl.spellcheck = false;
+      }
       sh.appendChild(inputEl);
     }
 
@@ -383,6 +389,39 @@ async function onSettings() {
 }
 
 // ---------- 起動 ----------
+function showStatus(text) {
+  const box = $('items');
+  box.textContent = '';
+  const e = document.createElement('div');
+  e.className = 'empty';
+  e.textContent = text;
+  box.appendChild(e);
+}
+
+// 通信エラーなどで先へ進めないとき
+async function retrySheet(title, message) {
+  await openSheet({
+    title, message, dismissible: false,
+    actions: [{ label: 'もう一度試す', value: 'retry', kind: 'primary' }],
+  });
+  location.reload();
+}
+
+async function ensureMember() {
+  if (await store.init()) return;
+  let message = '家族で決めた合言葉を入力してください。';
+  for (;;) {
+    const r = await openSheet({
+      title: '合言葉', message, dismissible: false,
+      input: { placeholder: '合言葉', required: true, raw: true, maxLength: 100 },
+      actions: [{ label: '確認', value: 'ok', kind: 'primary', needsText: true }],
+    });
+    showStatus('確認しています…');
+    if (await store.join(r.text)) return;
+    message = '合言葉が違います。もう一度入力してください。';
+  }
+}
+
 async function ensureUser() {
   if (store.getUser()) return;
   const name = await askText({
@@ -395,7 +434,18 @@ async function ensureUser() {
   await store.setUser(name);
 }
 
-function init() {
+let errorShown = false;
+function handleStoreError(e) {
+  if (errorShown) return;
+  errorShown = true;
+  if (e.code === 'permission-denied') {
+    retrySheet('アクセスできません', '合言葉が変更された可能性があります。もう一度確認します。');
+  } else {
+    retrySheet('通信エラー', '保存や読み込みに失敗しました。電波の状態を確認してください。');
+  }
+}
+
+function watchLists() {
   store.subscribeLists((arr) => {
     lists = arr;
     if (!lists.length) { // 全リスト削除後は空のまま
@@ -412,22 +462,40 @@ function init() {
       renderTabs();
     }
   });
+}
 
+async function init() {
+  let ready = false;
+  // 準備ができる前に送信しても、ページが再読み込みされないようにする
   $('add-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const input = $('add-input');
     const title = input.value.trim();
-    if (!title || !activeId) return;
+    if (!ready || !title || !activeId) return;
     input.value = '';
     await store.addItem(activeId, title);
     input.focus(); // 続けて入力できるよう、キーボードを出したままにする
-    const box = $('items');
-    box.scrollTop = 0;
+    $('items').scrollTop = 0;
   });
+
+  showStatus('接続しています…');
+  try {
+    store = await import('./store.js');
+    store.onError(handleStoreError);
+    await ensureMember();
+    await ensureUser();
+    showStatus('読み込んでいます…');
+    await store.start();
+  } catch (e) {
+    console.error(e);
+    showStatus('接続できませんでした。');
+    retrySheet('接続できません', '電波の状態を確認して、もう一度試してください。');
+    return;
+  }
+  ready = true;
+  watchLists();
   $('btn-settings').addEventListener('click', onSettings);
   $('btn-presets').addEventListener('click', openPresets);
-
-  ensureUser();
 }
 
 init();

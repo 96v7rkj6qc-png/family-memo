@@ -1,7 +1,7 @@
 // sw.js — アプリ本体（HTML/CSS/JS/アイコン）だけをキャッシュする。データは対象外。
-const CACHE = 'family-memo-shell-v2';
+const CACHE = 'family-memo-shell-v3';
 const SHELL = [
-  './', './index.html', './style.css', './app.js', './store.js',
+  './', './index.html', './style.css', './app.js', './store.js', './firebase-config.js',
   './manifest.webmanifest', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 
@@ -22,7 +22,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy));

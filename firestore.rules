@@ -1,0 +1,40 @@
+rules_version = '2';
+
+// 家族メモのセキュリティルール。
+// 合言葉は family/main/secrets/access の code に、管理画面で直接登録する。
+// ここに書かれていないパス（secrets を含む）は、アプリから読み書きできない。
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /family/main {
+
+      function secret() {
+        return get(/databases/$(database)/documents/family/main/secrets/access).data.code;
+      }
+
+      function myMember() {
+        return /databases/$(database)/documents/family/main/members/$(request.auth.uid);
+      }
+
+      // 合言葉を変更すると、古い合言葉で登録した端末はここで外れる
+      function isMember() {
+        return request.auth != null
+          && exists(myMember())
+          && get(myMember()).data.code == secret();
+      }
+
+      // 端末の登録：自分の分だけ、正しい合言葉を添えた場合に限る
+      match /members/{uid} {
+        allow get: if request.auth != null && request.auth.uid == uid
+          && (resource == null || resource.data.code == secret());
+        allow create, update: if request.auth != null && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['code', 'joinedAt'])
+          && request.resource.data.code == secret();
+      }
+
+      match /lists/{id}   { allow read, write: if isMember(); }
+      match /items/{id}   { allow read, write: if isMember(); }
+      match /presets/{id} { allow read, write: if isMember(); }
+      match /meta/{id}    { allow read, write: if isMember(); }
+    }
+  }
+}
