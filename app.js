@@ -11,6 +11,7 @@ let lists = [];
 let items = [];
 let activeId = null;
 let unsubItems = null;
+let unchecked = new Map(); // リストID → 未チェックの件数
 let sorting = false; // 並び替えモード
 
 // ---------- モーダル ----------
@@ -457,11 +458,17 @@ function openPresets() {
 // ---------- 描画 ----------
 function renderTabs() {
   const nav = $('tabs');
+  const scroll = nav.scrollTop;
   nav.textContent = '';
   lists.forEach((l) => {
     const b = document.createElement('button');
     b.className = 'tab' + (l.id === activeId ? ' on' : '');
-    b.textContent = l.name;
+    b.appendChild(el('span', 'tab-name', l.name));
+    const n = unchecked.get(l.id);
+    if (n) {
+      b.appendChild(el('span', 'badge', n > 99 ? '99+' : String(n)));
+      b.setAttribute('aria-label', l.name + '、未チェック' + n + '件');
+    }
     b.addEventListener('click', () => selectList(l.id));
     nav.appendChild(b);
   });
@@ -474,8 +481,10 @@ function renderTabs() {
 
   const cur = lists.find((l) => l.id === activeId);
   $('list-title').textContent = cur ? cur.name : '家族メモ';
+  nav.scrollTop = scroll;
+  // 4段目以降にある選択中のタブは見える位置へ
   const on = nav.querySelector('.tab.on');
-  if (on && on.scrollIntoView) on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  if (on) on.scrollIntoView({ block: 'nearest' });
 }
 
 function itemRow(it) {
@@ -741,6 +750,11 @@ async function init() {
   }
   ready = true;
   watchLists();
+  store.subscribeAllItems((arr) => {
+    unchecked = new Map();
+    arr.filter((i) => !i.done).forEach((i) => unchecked.set(i.listId, (unchecked.get(i.listId) || 0) + 1));
+    renderTabs();
+  });
   $('btn-settings').addEventListener('click', onSettings);
   $('btn-presets').addEventListener('click', openPresets);
   $('btn-sort').addEventListener('click', () => { sorting = !sorting; $('items').scrollTop = 0; renderItems(); });

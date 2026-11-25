@@ -1,5 +1,5 @@
 // sw.js — アプリ本体（HTML/CSS/JS/アイコン）だけをキャッシュする。データは対象外。
-const CACHE = 'family-memo-shell-v4';
+const CACHE = 'family-memo-shell-v5';
 const SHELL = [
   './', './index.html', './style.css', './app.js', './store.js', './firebase-config.js', './categories.js', './sortable.js',
   './manifest.webmanifest', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',

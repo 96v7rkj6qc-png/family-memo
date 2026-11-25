@@ -164,6 +164,10 @@ export async function addSamplePresets(listId) {
 }
 
 // ---------- 項目 ----------
+// 全リストの項目（タブの未チェック件数に使う）
+export function subscribeAllItems(cb) {
+  return subscribe(col('items'), cb);
+}
 export function subscribeItems(listId, cb) {
   itemCache.clear();
   return subscribe(query(col('items'), where('listId', '==', listId)), (arr) => {
