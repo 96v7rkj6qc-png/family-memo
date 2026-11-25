@@ -19,7 +19,10 @@
 <div id="app">
   <header class="top">
     <h1 id="list-title">家族メモ</h1>
-    <button id="btn-settings" class="icon-btn" aria-label="設定">⚙</button>
+    <div class="top-actions">
+      <button type="button" id="btn-sort" class="sort-btn" hidden>並び替え</button>
+      <button id="btn-settings" class="icon-btn" aria-label="設定">⚙</button>
+    </div>
   </header>
   <nav id="tabs" class="tabs" aria-label="リスト切り替え"></nav>
   <main id="items" class="list"></main>

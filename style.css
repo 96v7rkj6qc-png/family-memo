@@ -133,6 +133,31 @@ input { font: inherit; color: inherit; }
 .sheet .padd .in { flex: 1; width: auto; }
 .padd .add { width: 48px; }
 
+.top-actions { display: flex; align-items: center; flex: none; }
+.sort-btn { min-height: 44px; padding: 0 12px; border-radius: 8px; background: var(--chip); font-size: 14px; font-weight: 700; }
+[hidden] { display: none !important; }
+
+/* カテゴリ見出し・並び替え */
+.cat { display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; color: var(--accent); padding: 12px 0 4px; border-bottom: 2px solid var(--line); }
+.note { color: var(--sub); font-size: 13px; padding-top: 12px; }
+.handle {
+  width: 44px; height: 44px; flex: none; display: grid; place-items: center;
+  color: var(--sub); font-size: 22px; cursor: grab;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.dragging { background: var(--chip); }
+button.pt { text-align: left; min-height: 44px; }
+
+/* 編集シート */
+.f { font-size: 13px; color: var(--sub); font-weight: 700; margin-bottom: -4px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .f { margin: 0; }
+.sheet input[type="date"] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; text-align: left; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { min-height: 44px; padding: 0 14px; border-radius: 99px; background: var(--chip); font-size: 14px; }
+.chip.on { background: var(--accent); color: var(--onaccent); font-weight: 700; }
+.sheet .padd .sel { flex: none; width: 7.5em; padding: 0 6px; }
+
 /* モーダル／シート */
 .overlay {
   position: fixed; inset: 0; background: var(--overlay);
@@ -142,7 +167,10 @@ input { font: inherit; color: inherit; }
   width: 100%; max-width: 640px; background: var(--bg);
   border-radius: 20px 20px 0 0; padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
   display: flex; flex-direction: column; gap: 10px;
+  max-height: 92dvh; overflow-y: auto;
 }
+.sheet > * { flex-shrink: 0; }
+.sheet > .plist { flex-shrink: 1; }
 .sheet h2 { font-size: 18px; }
 .sheet p { color: var(--sub); font-size: 15px; }
 .sheet .in { flex: none; width: 100%; }

@@ -1,4 +1,7 @@
 // app.js — 画面制御。データには store.js 経由でのみ触れる。
+import { categoriesOf, categoryIdOf, groupByCategory, OTHER_NAME } from './categories.js';
+import { makeSortable, isDragging, deferUntilDrop } from './sortable.js';
+
 let store; // 起動時に読み込む（通信できないときに画面で知らせるため）
 
 const $ = (id) => document.getElementById(id);
@@ -8,6 +11,7 @@ let lists = [];
 let items = [];
 let activeId = null;
 let unsubItems = null;
+let sorting = false; // 並び替えモード
 
 // ---------- モーダル ----------
 function openSheet({ title, message, input, actions, dismissible = true }) {
@@ -104,6 +108,216 @@ async function askConfirm({ title, message, okLabel }) {
   return !!r && r.value === 'ok';
 }
 
+// ---------- 部品 ----------
+function el(tag, className, text) {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  if (text !== undefined) e.textContent = text;
+  if (tag === 'button') e.type = 'button';
+  return e;
+}
+
+function handle() {
+  const h = el('span', 'handle', '≡');
+  h.setAttribute('aria-label', 'つまんで並び替え');
+  return h;
+}
+
+// 中身を自由に組み立てるシート
+function makeSheet(title, { tall = false, onClose } = {}) {
+  const ov = el('div', 'overlay');
+  const sh = el('div', 'sheet' + (tall ? ' tall' : ''));
+  sh.setAttribute('role', 'dialog');
+  sh.setAttribute('aria-modal', 'true');
+  const head = el('div', 'sheet-head');
+  head.appendChild(el('h2', '', title));
+  sh.appendChild(head);
+  ov.appendChild(sh);
+  const close = () => { ov.remove(); if (onClose) onClose(); };
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  $('modal-root').appendChild(ov);
+  return { sh, head, close };
+}
+
+function textInput(value, label) {
+  const i = el('input', 'in');
+  i.type = 'text';
+  i.value = value;
+  i.maxLength = 200;
+  i.setAttribute('aria-label', label);
+  return i;
+}
+
+// カテゴリの選択ボタン。value() で選択中のID（その他は null）
+function categoryPicker(cats, selected) {
+  let current = selected;
+  const box = el('div', 'chips');
+  [...cats, { id: null, name: OTHER_NAME }].forEach((c) => {
+    const b = el('button', 'chip' + (c.id === current ? ' on' : ''), c.name);
+    b.addEventListener('click', () => {
+      current = c.id;
+      [...box.children].forEach((x) => x.classList.toggle('on', x === b));
+    });
+    box.appendChild(b);
+  });
+  return { box, value: () => current };
+}
+
+// ---------- 日付 ----------
+const pad = (n) => String(n).padStart(2, '0');
+function shortDate(ms) {
+  const d = new Date(ms);
+  const md = (d.getMonth() + 1) + '/' + d.getDate();
+  return d.getFullYear() === new Date().getFullYear() ? md : d.getFullYear() + '/' + md;
+}
+function inputDate(ms) {
+  const d = new Date(ms);
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+// 日付だけ差し替えて、時刻は元のまま
+function withDate(ms, value) {
+  const [y, m, day] = value.split('-').map(Number);
+  const d = new Date(ms);
+  d.setFullYear(y, m - 1, day);
+  return d.getTime();
+}
+
+function dateField(label, ms) {
+  const wrap = el('label', 'field');
+  wrap.appendChild(el('span', 'f', label));
+  const i = el('input', 'in');
+  i.type = 'date';
+  i.value = ms ? inputDate(ms) : '';
+  wrap.appendChild(i);
+  const first = i.value;
+  // 変更されていれば新しい時刻、そうでなければ null
+  return { wrap, changed: () => (i.value && i.value !== first ? withDate(ms || Date.now(), i.value) : null) };
+}
+
+// ---------- 項目の編集 ----------
+function openItemEditor(it) {
+  const cats = categoriesOf(lists.find((l) => l.id === it.listId));
+  const { sh, close } = makeSheet('項目を編集');
+
+  const title = textInput(it.title, '内容');
+  sh.append(el('span', 'f', '内容'), title);
+
+  let picker = null;
+  const firstCat = categoryIdOf(it, cats);
+  if (cats.length) {
+    picker = categoryPicker(cats, firstCat);
+    sh.append(el('span', 'f', 'カテゴリ'), picker.box);
+  }
+  const created = dateField('追加した日', it.createdAt);
+  sh.appendChild(created.wrap);
+  const checked = it.done ? dateField('チェックした日', it.checkedAt) : null;
+  if (checked) sh.appendChild(checked.wrap);
+
+  const save = el('button', 'btn primary', '保存');
+  save.addEventListener('click', () => {
+    // 変えた箇所だけを書き込む（他の人の変更を上書きしないように）
+    const patch = {};
+    const t = title.value.trim();
+    if (t && t !== it.title) patch.title = t;
+    if (picker && picker.value() !== firstCat) patch.category = picker.value();
+    else if (patch.title && it.category === undefined) patch.category = firstCat;
+    const c = created.changed();
+    if (c) { patch.createdAt = c; patch.order = it.order ?? it.createdAt; } // 並び順は変えない
+    const k = checked && checked.changed();
+    if (k) { patch.checkedAt = k; patch.doneOrder = it.doneOrder ?? it.checkedAt; }
+    if (Object.keys(patch).length) store.updateItem(it.id, patch);
+    close();
+  });
+  const cancel = el('button', 'btn plain', 'キャンセル');
+  cancel.addEventListener('click', close);
+  sh.append(save, cancel);
+}
+
+// ---------- 定番の編集 ----------
+function openPresetEditor(p, cats) {
+  const { sh, close } = makeSheet('定番を編集');
+  const title = textInput(p.title, '名前');
+  sh.append(el('span', 'f', '名前'), title);
+  let picker = null;
+  if (cats.length) {
+    picker = categoryPicker(cats, categoryIdOf(p, cats));
+    sh.append(el('span', 'f', 'カテゴリ'), picker.box);
+  }
+  const save = el('button', 'btn primary', '保存');
+  save.addEventListener('click', () => {
+    const patch = { title: title.value.trim() || p.title };
+    if (picker) patch.category = picker.value();
+    store.updatePreset(p.id, patch);
+    close();
+  });
+  const cancel = el('button', 'btn plain', 'キャンセル');
+  cancel.addEventListener('click', close);
+  sh.append(save, cancel);
+}
+
+// ---------- カテゴリの編集 ----------
+let categoryView = null;
+
+function openCategories(listId) {
+  const { sh, close } = makeSheet('カテゴリの編集', { tall: true, onClose: () => { categoryView = null; } });
+  sh.appendChild(el('p', '', '名前をタップで変更、≡ で並び替え。「その他」は常に最後に表示します。'));
+  const box = el('div', 'plist');
+  const form = el('form', 'padd');
+  const input = textInput('', 'カテゴリを追加');
+  input.placeholder = 'カテゴリを追加…';
+  input.maxLength = 20;
+  const add = el('button', 'add', '＋');
+  add.type = 'submit';
+  add.setAttribute('aria-label', 'カテゴリを追加');
+  form.append(input, add);
+  const done = el('button', 'btn plain', '閉じる');
+  done.addEventListener('click', close);
+  sh.append(box, form, done);
+
+  const current = () => categoriesOf(lists.find((l) => l.id === listId));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (!name) return;
+    input.value = '';
+    store.setCategories(listId, [...current(), { id: 'c' + Date.now().toString(36), name }]);
+  });
+
+  function render() {
+    if (isDragging()) { deferUntilDrop(render); return; }
+    box.textContent = '';
+    const group = el('div');
+    current().forEach((c) => {
+      const row = el('div', 'prow');
+      row.dataset.id = c.id;
+      const name = el('button', 'pt', c.name);
+      name.addEventListener('click', async () => {
+        const n = await askText({ title: 'カテゴリ名の変更', value: c.name, okLabel: '保存' });
+        if (n) store.setCategories(listId, current().map((x) => (x.id === c.id ? { ...x, name: n } : x)));
+      });
+      const x = el('button', 'px', '✕');
+      x.setAttribute('aria-label', c.name + 'を削除');
+      x.addEventListener('click', async () => {
+        const ok = await askConfirm({
+          title: '「' + c.name + '」を削除',
+          message: 'このカテゴリの項目と定番は「その他」になります。',
+          okLabel: '削除する',
+        });
+        if (ok) store.setCategories(listId, current().filter((y) => y.id !== c.id));
+      });
+      row.append(name, x, handle());
+      group.appendChild(row);
+    });
+    makeSortable(group, (ids) => {
+      const cats = current();
+      store.setCategories(listId, ids.map((id) => cats.find((c) => c.id === id)).filter(Boolean));
+    });
+    box.appendChild(group);
+  }
+  categoryView = { refresh: render };
+  render();
+}
+
 // ---------- 定番シート ----------
 let presetView = null; // 開いている間だけ { refresh }
 
@@ -148,13 +362,24 @@ function openPresets() {
   addBtn.type = 'submit';
   addBtn.textContent = '＋';
   addBtn.setAttribute('aria-label', '定番に追加');
-  addRow.append(addIn, addBtn);
+  // 追加する定番のカテゴリ
+  const cats = categoriesOf(list);
+  const addCat = el('select', 'in sel');
+  addCat.setAttribute('aria-label', 'カテゴリ');
+  [...cats, { id: '', name: OTHER_NAME }].forEach((c) => {
+    const o = el('option', '', c.name);
+    o.value = c.id || '';
+    addCat.appendChild(o);
+  });
+  addCat.value = '';
+  addCat.hidden = !cats.length;
+  addRow.append(addCat, addIn, addBtn);
   addRow.addEventListener('submit', (e) => {
     e.preventDefault();
     const v = addIn.value.trim();
     if (!v) return;
     addIn.value = '';
-    store.addPreset(listId, v);
+    store.addPreset(listId, v, addCat.value || null);
     addIn.focus();
   });
 
@@ -165,9 +390,10 @@ function openPresets() {
   sh.append(head, hint, plist, addRow, closeBtn);
 
   function render() {
+    if (isDragging()) { deferUntilDrop(render); return; }
     editBtn.textContent = editing ? '完了' : '編集';
     hint.textContent = editing
-      ? '名前をタップで変更、✕で削除できます。'
+      ? '名前をタップで変更、✕で削除、≡ で並び替え。'
       : 'タップするとリストに追加されます。';
     addRow.hidden = !editing;
     plist.textContent = '';
@@ -185,42 +411,31 @@ function openPresets() {
       return;
     }
     const pending = new Set(items.filter((i) => !i.done).map((i) => i.title));
-    presets.forEach((p) => {
-      if (editing) {
-        const row = document.createElement('div');
-        row.className = 'prow';
-        const t = document.createElement('button');
-        t.className = 'pt';
-        t.style.textAlign = 'left';
-        t.style.minHeight = '44px';
-        t.textContent = p.title;
-        t.addEventListener('click', async () => {
-          const n = await askText({ title: '定番の名前を変更', value: p.title, okLabel: '保存' });
-          if (n) store.renamePreset(p.id, n);
-        });
-        const x = document.createElement('button');
-        x.className = 'px';
-        x.textContent = '✕';
-        x.setAttribute('aria-label', p.title + 'を定番から削除');
-        x.addEventListener('click', () => store.deletePreset(p.id));
-        row.append(t, x);
-        plist.appendChild(row);
-      } else {
-        const added = pending.has(p.title);
-        const row = document.createElement('button');
-        row.className = 'prow' + (added ? ' added' : '');
-        row.style.minHeight = '52px';
-        const t = document.createElement('span');
-        t.className = 'pt';
-        t.textContent = p.title;
-        const a = document.createElement('span');
-        a.className = 'pa';
-        a.textContent = added ? '追加済み' : '＋';
-        row.append(t, a);
-        row.disabled = added;
-        row.addEventListener('click', () => store.addItem(listId, p.title));
-        plist.appendChild(row);
-      }
+    groupByCategory(presets, cats).forEach((g) => {
+      if (g.name) plist.appendChild(el('div', 'cat', g.name));
+      const group = el('div');
+      g.entries.forEach((p) => {
+        if (editing) {
+          const row = el('div', 'prow');
+          row.dataset.id = p.id;
+          const t = el('button', 'pt', p.title);
+          t.addEventListener('click', () => openPresetEditor(p, cats));
+          const x = el('button', 'px', '✕');
+          x.setAttribute('aria-label', p.title + 'を定番から削除');
+          x.addEventListener('click', () => store.deletePreset(p.id));
+          row.append(t, x, handle());
+          group.appendChild(row);
+        } else {
+          const added = pending.has(p.title);
+          const row = el('button', 'prow' + (added ? ' added' : ''));
+          row.append(el('span', 'pt', p.title), el('span', 'pa', added ? '追加済み' : '＋'));
+          row.disabled = added;
+          row.addEventListener('click', () => store.addItem(listId, p.title, categoryIdOf(p, cats)));
+          group.appendChild(row);
+        }
+      });
+      if (editing) makeSortable(group, (ids) => store.reorder('presets', ids));
+      plist.appendChild(group);
     });
   }
 
@@ -264,37 +479,25 @@ function renderTabs() {
 }
 
 function itemRow(it) {
-  const row = document.createElement('div');
-  row.className = 'item' + (it.done ? ' done' : '');
+  const row = el('div', 'item' + (it.done ? ' done' : ''));
 
-  const chkBtn = document.createElement('button');
-  chkBtn.className = 'chk-btn';
+  const chkBtn = el('button', 'chk-btn');
   chkBtn.setAttribute('role', 'checkbox');
   chkBtn.setAttribute('aria-checked', String(it.done));
   chkBtn.setAttribute('aria-label', it.title);
-  const box = document.createElement('span');
-  box.className = 'chk';
-  box.textContent = it.done ? '✓' : '';
-  chkBtn.appendChild(box);
+  chkBtn.appendChild(el('span', 'chk', it.done ? '✓' : ''));
   chkBtn.addEventListener('click', () => store.toggleItem(it.id));
 
-  const body = document.createElement('button');
-  body.className = 'body';
-  const t = document.createElement('div');
-  t.className = 't';
-  t.textContent = it.title;
-  const m = document.createElement('div');
-  m.className = 'm';
-  const parts = [];
-  if (it.addedBy) parts.push('追加：' + it.addedBy);
-  if (it.done && it.checkedBy) parts.push('完了：' + it.checkedBy);
-  m.textContent = parts.join(' ・ ');
-  body.append(t, m);
-  body.addEventListener('click', () => store.toggleItem(it.id));
+  const body = el('button', 'body');
+  const added = [shortDate(it.createdAt), it.addedBy].filter(Boolean).join(' ');
+  const meta = it.done
+    ? '追加 ' + added + (it.checkedAt ? ' ・ 完了 ' + [shortDate(it.checkedAt), it.checkedBy].filter(Boolean).join(' ') : '')
+    : added;
+  body.append(el('div', 't', it.title), el('div', 'm', meta));
+  body.setAttribute('aria-label', it.title + 'を編集。' + meta);
+  body.addEventListener('click', () => openItemEditor(it));
 
-  const x = document.createElement('button');
-  x.className = 'x';
-  x.textContent = '✕';
+  const x = el('button', 'x', '✕');
   x.setAttribute('aria-label', it.title + 'を削除');
   x.addEventListener('click', () => store.deleteItem(it.id));
 
@@ -302,31 +505,68 @@ function itemRow(it) {
   return row;
 }
 
-function renderItems() {
-  const box = $('items');
-  box.textContent = '';
-  if (presetView) presetView.refresh(); // 定番シートの「追加済み」表示を更新
-  if (!activeId) return;
-  const todo = items.filter((i) => !i.done).sort((a, b) => a.createdAt - b.createdAt);
-  const done = items.filter((i) => i.done).sort((a, b) => (b.checkedAt || 0) - (a.checkedAt || 0));
+function sortRow(id, text) {
+  const row = el('div', 'item');
+  row.dataset.id = id;
+  row.append(el('div', 'body', text), handle());
+  return row;
+}
 
-  if (!todo.length && !done.length) {
-    const e = document.createElement('div');
-    e.className = 'empty';
-    e.textContent = '項目はまだありません。下の入力欄から追加できます。';
-    box.appendChild(e);
+// 並び替えモード：リストの順番と、未完了の項目（カテゴリの中で移動）
+function renderSorting(box, todo, cats) {
+  box.appendChild(el('p', 'note', '≡ をつまんで上下に動かします。'));
+  box.appendChild(el('div', 'cat', 'リストの順番'));
+  const listGroup = el('div');
+  lists.forEach((l) => listGroup.appendChild(sortRow(l.id, l.name)));
+  makeSortable(listGroup, (ids) => store.reorder('lists', ids));
+  box.appendChild(listGroup);
+
+  groupByCategory(todo, cats).forEach((g) => {
+    box.appendChild(el('div', 'cat', g.name || '項目'));
+    const group = el('div');
+    g.entries.forEach((it) => group.appendChild(sortRow(it.id, it.title)));
+    makeSortable(group, (ids) => store.reorder('items', ids));
+    box.appendChild(group);
+  });
+}
+
+function renderItems() {
+  if (presetView) presetView.refresh(); // 定番シートの「追加済み」表示を更新
+  if (isDragging()) { deferUntilDrop(renderItems); return; }
+  const box = $('items');
+  const scroll = box.scrollTop;
+  box.textContent = '';
+  $('btn-sort').textContent = sorting ? '完了' : '並び替え';
+  $('btn-sort').hidden = !activeId;
+  $('add-form').hidden = sorting;
+  if (!activeId) return;
+
+  const cats = categoriesOf(lists.find((l) => l.id === activeId));
+  const todo = items.filter((i) => !i.done); // store 側で並び順どおり
+  const done = items.filter((i) => i.done)
+    .sort((a, b) => (b.doneOrder ?? b.checkedAt ?? 0) - (a.doneOrder ?? a.checkedAt ?? 0));
+
+  if (sorting) {
+    renderSorting(box, todo, cats);
+    box.scrollTop = scroll;
     return;
   }
-  todo.forEach((it) => box.appendChild(itemRow(it)));
+  if (!todo.length && !done.length) {
+    box.appendChild(el('div', 'empty', '項目はまだありません。下の入力欄から追加できます。'));
+    return;
+  }
+  groupByCategory(todo, cats).forEach((g) => {
+    if (g.name) {
+      const h = el('div', 'cat');
+      h.append(el('span', '', g.name), el('span', '', String(g.entries.length)));
+      box.appendChild(h);
+    }
+    g.entries.forEach((it) => box.appendChild(itemRow(it)));
+  });
 
   if (done.length) {
-    const sec = document.createElement('div');
-    sec.className = 'sec';
-    const label = document.createElement('span');
-    label.textContent = '完了 ' + done.length;
-    const clear = document.createElement('button');
-    clear.className = 'clear';
-    clear.textContent = '完了を一括削除';
+    const sec = el('div', 'sec');
+    const clear = el('button', 'clear', '完了を一括削除');
     clear.addEventListener('click', async () => {
       const ok = await askConfirm({
         title: '完了を一括削除',
@@ -335,10 +575,11 @@ function renderItems() {
       });
       if (ok) store.clearCompleted(activeId);
     });
-    sec.append(label, clear);
+    sec.append(el('span', '', '完了 ' + done.length), clear);
     box.appendChild(sec);
     done.forEach((it) => box.appendChild(itemRow(it)));
   }
+  box.scrollTop = scroll;
 }
 
 // ---------- 操作 ----------
@@ -346,8 +587,9 @@ function selectList(id) {
   activeId = id;
   try { localStorage.setItem(ACTIVE_KEY, id); } catch (e) { /* 無視 */ }
   if (unsubItems) unsubItems();
-  unsubItems = store.subscribeItems(id, (arr) => { items = arr; renderItems(); });
+  items = [];
   renderTabs();
+  unsubItems = store.subscribeItems(id, (arr) => { items = arr; renderItems(); });
 }
 
 async function onCreateList() {
@@ -366,6 +608,7 @@ async function onSettings() {
     actions: [
       { label: '自分の名前を変更', value: 'user' },
       { label: 'このリストの名前を変更', value: 'rename' },
+      { label: 'このリストのカテゴリを編集', value: 'cats' },
       { label: 'このリストを削除', value: 'delete', kind: 'danger' },
       { label: '閉じる', value: 'close', kind: 'plain' },
     ],
@@ -377,7 +620,9 @@ async function onSettings() {
     renderItems();
   } else if (r.value === 'rename' && cur) {
     const n = await askText({ title: 'リスト名の変更', value: cur.name, okLabel: '保存' });
-    if (n) store.renameList(cur.id, n);
+    if (n) store.renameList(cur, n);
+  } else if (r.value === 'cats' && cur) {
+    openCategories(cur.id);
   } else if (r.value === 'delete' && cur) {
     const ok = await askConfirm({
       title: '「' + cur.name + '」を削除',
@@ -460,7 +705,9 @@ function watchLists() {
       selectList(lists.some((l) => l.id === saved) ? saved : lists[0].id);
     } else {
       renderTabs();
+      renderItems();
     }
+    if (categoryView) categoryView.refresh();
   });
 }
 
@@ -496,6 +743,7 @@ async function init() {
   watchLists();
   $('btn-settings').addEventListener('click', onSettings);
   $('btn-presets').addEventListener('click', openPresets);
+  $('btn-sort').addEventListener('click', () => { sorting = !sorting; $('items').scrollTop = 0; renderItems(); });
 }
 
 init();

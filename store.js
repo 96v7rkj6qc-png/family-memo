@@ -9,6 +9,7 @@ import {
   onSnapshot, query, where, writeBatch, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
+import { categoriesOf, guessCategory } from './categories.js';
 
 const USER_KEY = 'familyMemo.user';
 const ROOT = ['family', 'main'];
@@ -63,9 +64,9 @@ export async function start() {
     if ((await tx.get(seedRef)).exists()) return;
     const now = Date.now();
     [['super', 'スーパー', SAMPLE_SUPER], ['daily', '日用品', SAMPLE_DAILY]].forEach(([id, name, samples], n) => {
-      tx.set(ref('lists', id), { name, createdAt: now + n });
+      tx.set(ref('lists', id), { name, createdAt: now + n, categories: categoriesOf({ name }) });
       samples.forEach((title, i) => {
-        tx.set(ref('presets', id + '-' + i), { listId: id, title, createdAt: now + i });
+        tx.set(ref('presets', id + '-' + i), { listId: id, title, category: guessCategory(title), createdAt: now + i });
       });
     });
     tx.set(seedRef, { createdAt: now });
@@ -75,7 +76,7 @@ export async function start() {
 // ---------- 内部 ----------
 const toArray = (snap) => snap.docs
   .map((d) => ({ ...d.data(), id: d.id }))
-  .sort((a, b) => a.createdAt - b.createdAt);
+  .sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt));
 
 function subscribe(target, cb) {
   return onSnapshot(target, (snap) => cb(toArray(snap)), report);
@@ -106,12 +107,24 @@ export function subscribeLists(cb) {
 }
 export async function createList(name) {
   const r = doc(col('lists'));
-  const list = { name: name.trim(), createdAt: Date.now() };
+  const list = { name: name.trim(), createdAt: Date.now(), categories: categoriesOf({ name: name.trim() }) };
   send(setDoc(r, list));
   return { ...list, id: r.id };
 }
-export async function renameList(listId, name) {
-  send(updateDoc(ref('lists', listId), { name: name.trim() }));
+// list を渡すのは、名前を変えても今のカテゴリが変わらないようにするため
+export async function renameList(list, name) {
+  send(updateDoc(ref('lists', list.id), { name: name.trim(), categories: categoriesOf(list) }));
+}
+export async function setCategories(listId, categories) {
+  send(updateDoc(ref('lists', listId), { categories }));
+}
+
+// ---------- 並び替え ----------
+// kind: 'lists' | 'items' | 'presets'。ids の順に order を振る（新しく追加した分は末尾に並ぶ）
+export async function reorder(kind, ids) {
+  const batch = writeBatch(db);
+  ids.forEach((id, i) => batch.update(ref(kind, id), { order: i }));
+  send(batch.commit());
 }
 export async function deleteList(listId) {
   send((async () => {
@@ -126,11 +139,11 @@ export async function deleteList(listId) {
 export function subscribePresets(listId, cb) {
   return subscribe(query(col('presets'), where('listId', '==', listId)), cb);
 }
-export async function addPreset(listId, title) {
-  send(setDoc(doc(col('presets')), { listId, title: title.trim(), createdAt: Date.now() }));
+export async function addPreset(listId, title, category = null) {
+  send(setDoc(doc(col('presets')), { listId, title: title.trim(), category, createdAt: Date.now() }));
 }
-export async function renamePreset(presetId, title) {
-  send(updateDoc(ref('presets', presetId), { title: title.trim() }));
+export async function updatePreset(presetId, patch) {
+  send(updateDoc(ref('presets', presetId), patch));
 }
 export async function deletePreset(presetId) {
   send(deleteDoc(ref('presets', presetId)));
@@ -144,7 +157,7 @@ export async function addSamplePresets(listId) {
     const now = Date.now();
     const batch = writeBatch(db);
     samples.forEach((title, i) => {
-      batch.set(ref('presets', listId + '-' + i), { listId, title, createdAt: now + i });
+      batch.set(ref('presets', listId + '-' + i), { listId, title, category: guessCategory(title), createdAt: now + i });
     });
     await batch.commit();
   })());
@@ -159,10 +172,11 @@ export function subscribeItems(listId, cb) {
     cb(arr);
   });
 }
-export async function addItem(listId, title) {
+export async function addItem(listId, title, category = null) {
   send(setDoc(doc(col('items')), {
     listId,
     title: title.trim(),
+    category,
     done: false,
     addedBy: getUser() || '',
     checkedBy: null,
@@ -178,7 +192,11 @@ export async function toggleItem(itemId) {
     done,
     checkedBy: done ? (getUser() || '') : null,
     checkedAt: done ? Date.now() : null,
+    doneOrder: null,
   }));
+}
+export async function updateItem(itemId, patch) {
+  send(updateDoc(ref('items', itemId), patch));
 }
 export async function deleteItem(itemId) {
   send(deleteDoc(ref('items', itemId)));
