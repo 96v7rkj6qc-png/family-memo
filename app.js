@@ -689,10 +689,18 @@ async function ensureUser() {
 }
 
 let errorShown = false;
-function handleStoreError(e) {
+async function handleStoreError(e) {
   if (errorShown) return;
   errorShown = true;
   if (e.code === 'permission-denied') {
+    // 端末に残った内容を画面からも保存先からも消してから、確認し直す
+    $('modal-root').textContent = '';
+    $('tabs').textContent = '';
+    $('list-title').textContent = '家族メモ';
+    $('add-form').hidden = true;
+    $('btn-sort').hidden = true;
+    showStatus('');
+    await store.reset();
     retrySheet('アクセスできません', '合言葉が変更された可能性があります。もう一度確認します。');
   } else {
     retrySheet('通信エラー', '保存や読み込みに失敗しました。電波の状態を確認してください。');

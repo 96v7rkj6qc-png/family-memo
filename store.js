@@ -5,18 +5,24 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js';
 import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js';
 import {
-  getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  terminate, clearIndexedDbPersistence,
+  collection, doc, getDoc, getDocFromServer, getDocs, setDoc, updateDoc, deleteDoc,
   onSnapshot, query, where, writeBatch, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
 import { categoriesOf, guessCategory } from './categories.js';
 
 const USER_KEY = 'familyMemo.user';
+const READY_KEY = 'familyMemo.ready'; // この端末で登録と初回準備が済んだユーザーID
 const ROOT = ['family', 'main'];
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+// データは端末にも保存する（次回はすぐ表示でき、圏外でも使える。通信が戻ると同期される）
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 
 const col = (name) => collection(db, ...ROOT, name);
 const ref = (name, id) => doc(db, ...ROOT, name, id);
@@ -28,9 +34,33 @@ const send = (promise) => { promise.catch(report); };
 export function onError(fn) { errorHandler = fn; }
 
 // ---------- 認証と合言葉 ----------
-// 戻り値: true = 登録済み / false = 合言葉の入力が必要。通信できないときは例外。
+const isReady = () => {
+  try { return !!auth.currentUser && localStorage.getItem(READY_KEY) === auth.currentUser.uid; } catch (e) { return false; }
+};
+
+// 合言葉が変わっていないかを、表示を待たせずに裏で確かめる
+async function verifyMember() {
+  try {
+    const snap = await getDocFromServer(ref('members', auth.currentUser.uid));
+    if (!snap.exists()) report(Object.assign(new Error('not a member'), { code: 'permission-denied' }));
+  } catch (e) {
+    if (e.code === 'permission-denied') report(e); // 圏外などは無視して、端末の内容を使う
+  }
+}
+
+// 登録を取り消し、端末に保存したデータを消す（このあと再読み込みすること）
+export async function reset() {
+  try { localStorage.removeItem(READY_KEY); } catch (e) { /* 無視 */ }
+  try {
+    await terminate(db);
+    await clearIndexedDbPersistence(db);
+  } catch (e) { console.warn(e); }
+}
+
+// 戻り値: true = 登録済み / false = 合言葉の入力が必要。初回に通信できないときは例外。
 export async function init() {
   await auth.authStateReady();
+  if (isReady()) { verifyMember(); return true; }
   if (!auth.currentUser) await signInAnonymously(auth);
   try {
     const snap = await getDoc(ref('members', auth.currentUser.uid));
@@ -59,6 +89,7 @@ const SAMPLE_DAILY = ['トイレットペーパー', 'ティッシュ', '洗濯�
 
 // 家族で最初の1回だけ、スーパー・日用品とサンプル定番を作る
 export async function start() {
+  if (isReady()) return;
   const seedRef = ref('meta', 'seed');
   await runTransaction(db, async (tx) => {
     if ((await tx.get(seedRef)).exists()) return;
@@ -71,6 +102,7 @@ export async function start() {
     });
     tx.set(seedRef, { createdAt: now });
   });
+  try { localStorage.setItem(READY_KEY, auth.currentUser.uid); } catch (e) { /* 無視 */ }
 }
 
 // ---------- 内部 ----------
