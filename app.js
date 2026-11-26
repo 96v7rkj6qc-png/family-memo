@@ -109,6 +109,43 @@ async function askConfirm({ title, message, okLabel }) {
   return !!r && r.value === 'ok';
 }
 
+// ---------- お知らせ（画面下に数秒だけ出す） ----------
+let toastTimer = null;
+let deleted = []; // お知らせが出ている間に削除した項目（まとめて元に戻せる）
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  deleted = [];
+  $('toast').hidden = true;
+}
+function showToast(text, actionLabel, onAction) {
+  clearTimeout(toastTimer);
+  const box = $('toast');
+  box.textContent = '';
+  const b = el('button', 'toast-btn', actionLabel);
+  b.addEventListener('click', () => { onAction(); hideToast(); });
+  box.append(el('span', 'toast-text', text), b);
+  box.hidden = false;
+  toastTimer = setTimeout(hideToast, 6000);
+}
+
+// 長い名前でもお知らせの文が読めるように縮める
+const short = (title) => (title.length > 10 ? title.slice(0, 10) + '…' : title);
+
+function removeItem(it) {
+  store.deleteItem(it.id);
+  deleted.push(it);
+  const batch = deleted;
+  showToast(
+    batch.length > 1 ? batch.length + '件削除しました' : '「' + short(it.title) + '」を削除しました',
+    '元に戻す',
+    () => batch.forEach((x) => store.restoreItem(x)),
+  );
+}
+
+// 全角半角・大文字小文字・前後の空白の違いは同じ名前とみなす
+const sameKey = (title) => title.normalize('NFKC').trim().toLowerCase();
+
 // ---------- 部品 ----------
 function el(tag, className, text) {
   const e = document.createElement(tag);
@@ -411,7 +448,7 @@ function openPresets() {
       plist.appendChild(s);
       return;
     }
-    const pending = new Set(items.filter((i) => !i.done).map((i) => i.title));
+    const pending = new Set(items.filter((i) => !i.done).map((i) => sameKey(i.title)));
     groupByCategory(presets, cats).forEach((g) => {
       if (g.name) plist.appendChild(el('div', 'cat', g.name));
       const group = el('div');
@@ -427,7 +464,7 @@ function openPresets() {
           row.append(t, x, handle());
           group.appendChild(row);
         } else {
-          const added = pending.has(p.title);
+          const added = pending.has(sameKey(p.title));
           const row = el('button', 'prow' + (added ? ' added' : ''));
           row.append(el('span', 'pt', p.title), el('span', 'pa', added ? '追加済み' : '＋'));
           row.disabled = added;
@@ -508,7 +545,7 @@ function itemRow(it) {
 
   const x = el('button', 'x', '✕');
   x.setAttribute('aria-label', it.title + 'を削除');
-  x.addEventListener('click', () => store.deleteItem(it.id));
+  x.addEventListener('click', () => removeItem(it));
 
   row.append(chkBtn, body, x);
   return row;
@@ -695,6 +732,7 @@ async function handleStoreError(e) {
   if (e.code === 'permission-denied') {
     // 端末に残った内容を画面からも保存先からも消してから、確認し直す
     $('modal-root').textContent = '';
+    hideToast();
     $('tabs').textContent = '';
     $('list-title').textContent = '家族メモ';
     $('add-form').hidden = true;
@@ -737,7 +775,14 @@ async function init() {
     const title = input.value.trim();
     if (!ready || !title || !activeId) return;
     input.value = '';
-    await store.addItem(activeId, title);
+    const listId = activeId;
+    if (items.some((i) => !i.done && i.listId === listId && sameKey(i.title) === sameKey(title))) {
+      deleted = [];
+      showToast('「' + short(title) + '」はもう入っています', 'それでも追加', () => store.addItem(listId, title));
+      input.focus();
+      return;
+    }
+    await store.addItem(listId, title);
     input.focus(); // 続けて入力できるよう、キーボードを出したままにする
     $('items').scrollTop = 0;
   });

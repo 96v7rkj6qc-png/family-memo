@@ -237,6 +237,11 @@ export async function updateItem(itemId, patch) {
 export async function deleteItem(itemId) {
   send(deleteDoc(ref('items', itemId)));
 }
+// 削除の取り消し：同じIDに元の内容を書き戻す
+export async function restoreItem(item) {
+  const { id, ...data } = item;
+  send(setDoc(ref('items', id), data));
+}
 export async function clearCompleted(listId) {
   const refs = [...itemCache.values()]
     .filter((i) => i.listId === listId && i.done)

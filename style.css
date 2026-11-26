@@ -103,6 +103,16 @@ input { font: inherit; color: inherit; }
 .sec { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; min-height: 44px; font-size: 13px; color: var(--sub); font-weight: 700; }
 .clear { min-height: 44px; padding: 0 12px; border-radius: 8px; color: var(--danger); border: 1px solid var(--danger); font-size: 13px; font-weight: 700; }
 
+/* お知らせ（入力欄のすぐ上に重ねる） */
+.toast-anchor { position: relative; flex: none; }
+.toast {
+  position: absolute; left: 12px; right: 12px; bottom: 8px;
+  display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 4px 4px 16px;
+  border-radius: 12px; background: var(--fg); color: var(--bg); font-size: 15px;
+}
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast-btn { flex: none; min-height: 44px; padding: 0 12px; color: var(--bg); font-weight: 700; text-decoration: underline; }
+
 /* 下部固定の入力欄 */
 .bar {
   flex: none; display: flex; gap: 8px;

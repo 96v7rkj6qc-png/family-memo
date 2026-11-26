@@ -1,7 +1,7 @@
 // sw.js — アプリ本体（HTML/CSS/JS/アイコン）と Firebase の部品をキャッシュする。
 // データは対象外（Firestore が端末に保存する）。
 // 保存済みのものを先に使うので、ファイルを変えて公開するときは必ず CACHE の番号を上げること。
-const CACHE = 'family-memo-shell-v6';
+const CACHE = 'family-memo-shell-v7';
 const SDK = 'https://www.gstatic.com/firebasejs/13.4.0/'; // store.js の版と合わせる
 const SHELL = [
   './', './index.html', './style.css', './app.js', './store.js', './firebase-config.js', './categories.js', './sortable.js',
